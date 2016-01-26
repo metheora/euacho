@@ -9,14 +9,18 @@ function MapCtrl($scope,$http) {
         minZoom:15,
         mapTypeId: google.maps.MapTypeId.ROADMAP
     };
-    var markerCluster;
+    var markerCluster, pontosCluster;
 
     //Markers should be added after map is loaded
     $scope.onMapIdle = function() {
         if (markerCluster === undefined){
             markerCluster = new MarkerClusterer($scope.myMap, [], {
+                maxZoom:13,                
                 //imagePath: 'http://jpfritz.github.io/dfb-spiele/icons/m'
-            })    
+            });
+            pontosCluster = new MarkerClusterer($scope.myMap, [], {
+                //imagePath: 'http://jpfritz.github.io/dfb-spiele/icons/m'
+            })       
             $.getJSON('http://dadosabertos.rio.rj.gov.br/apiTransporte/apresentacao/rest/index.cfm/obterTodasPosicoes',function(data){
             var markers = [];
             var arr = data.DATA;
@@ -35,13 +39,33 @@ function MapCtrl($scope,$http) {
                     labelStyle: {opacity: 0.75},
                 });
                 marker.linha = o[2];
-                
-                google.maps.event.addListener(marker, 'mouseover', (function (marker, content) {
+                window.allTracks = [];
+                google.maps.event.addListener(marker, 'click', (function (marker, content) {
                     return function () {
                         infoWindow.setContent(content);
                         infoWindow.open($scope.myMap, marker);
-                        if(marker.linha != ''){
-                            dlTrack(marker.linha);
+                        if(marker.linha != '' && marker.linha != 'N/A'){
+                            dlTrack(marker,function(shapes){
+                                //clean existing tracks
+                                for (var index = 0; index < window.allTracks.length; index++) {
+                                    var element = window.allTracks[index];
+                                    element.setMap(null);
+                                }
+                                for (var index = 0; index < shapes.length; index++) {
+                                    var element = shapes[index];
+                                    var flightPath = new google.maps.Polyline({
+                                        path: element,
+                                        geodesic: true,
+                                        strokeColor: '#FF0000',
+                                        strokeOpacity: 1.0,
+                                        strokeWeight: 2
+                                    });
+                                    flightPath.setMap($scope.myMap);
+                                    window.allTracks.push(flightPath);
+                                    $scope.$apply();            
+                                }
+                            });
+                            dlStops(marker)
                         }
                     }
                 })(marker, content));
@@ -67,17 +91,63 @@ function MapCtrl($scope,$http) {
     };
 
     var pontos = [];
-    var dlTrack = function(linha){
-        pontos.length = 0;
-        $.get('http://dadosabertos.rio.rj.gov.br/apiTransporte/Apresentacao/csv/gtfs/onibus/percursos/gtfs_linha'+linha+'-shapes.csv',function(data){
+    var dlTrack = function(mkr,cb){
+        var linha = mkr.linha;
+        if(mkr.shapes == undefined){
+            pontos.length = 0;
+            $.get('http://dadosabertos.rio.rj.gov.br/apiTransporte/Apresentacao/csv/gtfs/onibus/percursos/gtfs_linha'+linha+'-shapes.csv',function(data){
+                var arr = data.split('\n');
+                var shapes = {};
+                var shapesArr = [];
+                for(var i=1;i<arr.length;i++){
+                    var o = arr[i].split(',');
+                    var pt = {linha:o[0],descricao:o[1],order:o[3],shapeid:o[4],lat:eval(o[5])*1,lng:eval(o[6])*1};
+                    pontos.push(pt);
+                    if(pt.shapeid != 'shapeid' && pt.shapeid != 'shape_id' && pt.shapeid != undefined)
+                    {
+                        shapes[pt.shapeid] = shapes[pt.shapeid] || [];
+                        shapes[pt.shapeid].push(pt);
+                    } 
+                }
+                for(var key in shapes) {
+                    var tr = shapes[key];
+                    shapesArr.push(tr);
+                }
+                mkr.shapes = shapesArr;
+                cb(mkr.shapes);
+            });
+        } else {
+            cb(mkr.shapes);
+        }
+    }
+    
+    var dlStops = function(mkr){
+        var pontosDeOnibus = [];
+        var linha = mkr.linha;
+        pontosDeOnibus.length = 0;
+        $.get('http://dadosabertos.rio.rj.gov.br/apiTransporte/Apresentacao/csv/gtfs/onibus/paradas/gtfs_linha'+linha+'-paradas.csv',function(data){
             var arr = data.split('\n');
-            for(var i=0;i<arr.length;i++){
+            for(var i=1;i<arr.length;i++){
                 var o = arr[i].split(',');
-                pontos.push({linha:o[0],descricao:o[1],order:o[3],shapeid:o[4],lat:o[5],lon:o[6]});
+                var pt = {linha:o[0],descricao:o[1],order:o[3],lat:o[4],lon:o[5]};
+                var marker = new MarkerWithLabel({
+                    map: $scope.myMap,
+                    title: "PONTO " + pt.linha,
+                    position: new google.maps.LatLng(pt.lat, pt.lon),
+                    labelContent: "PONTO " + pt.linha,
+                    labelAnchor: new google.maps.Point(22, 0),
+                    labelClass: "labels", // the CSS class for the label
+                    labelStyle: {opacity: 0.75},
+                });
+                pontosDeOnibus.push(marker);
             }
-            console.log(pontos);
+            mkr.pontosDeOnibus = pontosDeOnibus;
+            pontosCluster.clearMarkers();
+            pontosCluster.addMarkers(mkr.pontosDeOnibus);
+            console.log(pontosDeOnibus);
         });
     }
+    
     
     $scope.markerClicked = function(m) {
         window.alert("clicked");
